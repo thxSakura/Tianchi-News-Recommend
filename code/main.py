@@ -19,8 +19,8 @@ from tqdm import tqdm
 
 warnings.filterwarnings('ignore')
 
-data_path = 'work/tianchinewsrecommend/data/' # 天池平台路径
-save_path = 'work/tianchinewsrecommend/output/'  # 天池平台路径
+data_path = '../data/' # 天池平台路径
+save_path = '../output/'  # 天池平台路径
 
 # # 全量训练集
 train_click = pd.read_csv(data_path + 'train_click_log.csv')
@@ -413,6 +413,7 @@ def train_and_predict(itemcf=False, itemcf_topk=10, hot=False, hot_topk=10, offl
         result = result.drop(columns=['category_id', 'created_at_ts', 'words_count', 'click_environment', 'click_deviceGroup',\
                             'click_os', 'click_country', 'click_region', 'click_referrer_type'])
         print(result.head(10))
+
         # 生成提交文件
         def submit(recall_df, topk=10, model_name=None):
             recall_df = recall_df.sort_values(by=['user_id', 'pred_score'])
