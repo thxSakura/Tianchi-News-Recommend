@@ -72,3 +72,13 @@
 - total recall:54.4215%
 - 线下：0.3382830553994129
 - 线上：0.1921 ↓
+
+# 10(base 9)
+- hot recall中train和test的热门商品合并计算
+- itmecf:25
+- hot:10
+- itemcf recall:46.4875%
+- hot recall:27.6105%
+- total recall:54.458%
+- 线下：0.3350832239651688
+- 线上：0.1826 ↓

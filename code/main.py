@@ -27,13 +27,14 @@ train_click = pd.read_csv(data_path + 'train_click_log.csv')
 test_click = pd.read_csv(data_path + 'testA_click_log.csv')
 articles = pd.read_csv(data_path + 'articles.csv')
 
-def get_all_click_df(data_path='./data_raw/', offline=True):
-    if offline:
+def get_all_click_df(data_path='./data_raw/', train=True, test=True):
+    if train:
         all_click = pd.read_csv(data_path + 'train_click_log.csv')
-    else:
+    if test:
+        all_click = pd.read_csv(data_path + 'testA_click_log.csv')
+    if train and test:
         trn_click = pd.read_csv(data_path + 'train_click_log.csv')
         tst_click = pd.read_csv(data_path + 'testA_click_log.csv')
-
         all_click = trn_click.append(tst_click)
     
     all_click = all_click.drop_duplicates((['user_id', 'click_article_id', 'click_timestamp']))
@@ -46,6 +47,7 @@ def get_item_topk_click(click_df, k):
 
 #物品相似度召回
 def itemcf_recall(topk=10):
+    ts = time.time()
     def get_past_click():
         train = train_click.sort_values(['user_id', 'click_timestamp']).reset_index().copy()
         list1 = []
@@ -53,10 +55,8 @@ def itemcf_recall(topk=10):
         for user_id in tqdm(range(0, 200000)):
             user = train[train['user_id'] == user_id]
             row = user.tail(1)
-            if(len(user) >= 2):
-                train_indexs.append(row.index.values[0])
-            row = row.values.tolist()[0]
-            list1.append(row)
+            train_indexs.append(row.index.values[0])
+            list1.append(row.values.tolist()[0])
         train_last_click = pd.DataFrame(list1, columns=['index', 'user_id', 'article_id', 'click_timestamp', 'click_environment',\
                                         'click_deviceGroup', 'click_os', 'click_country', 'click_region',
                                         'click_referrer_type'])
@@ -66,14 +66,10 @@ def itemcf_recall(topk=10):
         
         test = test_click.sort_values(['user_id', 'click_timestamp']).reset_index().copy()
         list2 = []
-        test_indexs = []
         for user_id in tqdm(range(200000, 250000)):
             user = test[test['user_id'] == user_id]
             row = user.tail(1)
-            if(len(user) >= 2):
-                test_indexs.append(row.index.values[0])
-            row = row.values.tolist()[0]
-            list2.append(row)
+            list2.append(row.values.tolist()[0])
         test_last_click = pd.DataFrame(list2, columns=['index', 'user_id', 'article_id', 'click_timestamp', 'click_environment',\
                                         'click_deviceGroup', 'click_os', 'click_country', 'click_region',
                                         'click_referrer_type'])
@@ -162,16 +158,7 @@ def itemcf_recall(topk=10):
                     continue         
                 item_rank.setdefault(j, 0)
                 item_rank[j] +=  wij
-                
-#         # 不足10个，用热门商品补全
-#         if len(item_rank) < recall_item_num:
-#             for i, item in enumerate(item_topk_click):
-#                 if item in item_rank.items(): # 填充的item应该不在原来的列表中
-#                     continue
-#                 item_rank[item] = -i - 100 # 随便给个负数就行
-#                 if len(item_rank) == recall_item_num:
-#                     break
-        
+
         item_rank = sorted(item_rank.items(), key=lambda x: x[1], reverse=True)[:recall_item_num]
             
         return item_rank
@@ -226,30 +213,59 @@ def itemcf_recall(topk=10):
     test_recall.to_csv(save_path + 'itemcf_test_recall.csv', index=False)
     train_recall.to_csv(save_path + 'itemcf_train_recall.csv', index=False)
 
-    print('Itemcf Recall Finished!')
+    print('Itemcf Recall Finished! Cost time: {}'.format(time.time() - ts))
     return train_past_clicks, train_last_click, test_last_click
 
 #热度召回    
 def hot_recall(topk=10, train_past_clicks=None, test_last_click=None):
-    # 全量训练集
-    all_click_df = get_all_click_df(data_path, offline=False)
-    all_click_df = all_click_df.sort_values(['user_id', 'click_timestamp'])
-    item_topk_click = get_item_topk_click(all_click_df, k=topk)
-    articles_copy = articles.rename(columns={'article_id': 'click_article_id'})
-    all_click_df = all_click_df.merge(articles_copy, on='click_article_id', how='left')
+    ts = time.time()
     
+    train_click_df = get_all_click_df(data_path, test=False)
+    test_click_df = get_all_click_df(data_path, train=False)
+
+    train_click_df = train_click_df.sort_values(['user_id', 'click_timestamp'])
+    test_click_df = test_click_df.sort_values(['user_id', 'click_timestamp'])
+    
+    articles_copy = articles.rename(columns={'article_id': 'click_article_id'})
+    
+    train_click_df = train_click_df.merge(articles_copy, on='click_article_id', how='left')
+    test_click_df = test_click_df.merge(articles_copy, on='click_article_id', how='left')
+
     train_last_click = train_past_clicks.groupby('user_id').agg({'click_timestamp': 'max'}).reset_index()
 
+    train_last_click_time = train_last_click.set_index('user_id')['click_timestamp'].to_dict()
+    test_last_click_time = test_last_click.set_index('user_id')['click_timestamp'].to_dict()
+
+    def get_item_topk_click_(hot_articles, hot_articles_dict, click_time, past_click_articles, k):
+        topk_click = []
+        min_time = click_time - 24 * 60 * 60 * 1000
+        max_time = click_time + 24 * 60 * 60 * 1000
+        for article_id in hot_articles['article_id'].unique():
+            if article_id in past_click_articles:
+                continue
+            if not min_time <= hot_articles_dict[article_id] <= max_time:
+                continue
+            topk_click.append(article_id)
+            if len(topk_click) == k:
+                break
+        return topk_click
+
+    train_hot_articles = pd.DataFrame(train_click_df['click_article_id'].value_counts().index.to_list(), columns=['article_id'])
+    train_hot_articles = train_hot_articles.merge(articles).drop(columns=['category_id', 'words_count'])
+    train_hot_articles_dict = train_hot_articles.set_index('article_id')['created_at_ts'].to_dict()
+
+    test_hot_articles = pd.DataFrame(test_click_df['click_article_id'].value_counts().index.to_list(), columns=['article_id'])
+    test_hot_articles = test_hot_articles.merge(articles).drop(columns=['category_id', 'words_count'])
+    test_hot_articles_dict = test_hot_articles.set_index('article_id')['created_at_ts'].to_dict()
+    
     train_list = []
     for user_id in tqdm(range(0, 200000)):
-        user = all_click_df.loc[all_click_df['user_id'] == user_id]
-        user = user[:(len(user) - 1)]
-        click_time = train_last_click.loc[train_last_click['user_id'] == user_id, 'click_timestamp'].values[0]
-        all_click_user = all_click_df[(click_time - 24 * 60 * 60 * 1000 <= all_click_df['created_at_ts']) & (all_click_df['created_at_ts'] <= click_time + 24 * 60 * 60 * 1000)]
-        item_topk_click = get_item_topk_click(all_click_user, k=topk)
+        user = train_past_clicks.loc[train_past_clicks['user_id'] == user_id]
+#         user = user[:(len(user) - 1)]
+        click_time = train_last_click_time[user_id]
+        past_click_articles = user['click_article_id'].values
+        item_topk_click = get_item_topk_click_(train_hot_articles, train_hot_articles_dict, click_time, past_click_articles, k=topk)
         for id in item_topk_click:
-            if id in user['click_article_id'].values:
-                continue
             rows = [user_id, id]
             train_list.append(rows)
 
@@ -258,20 +274,18 @@ def hot_recall(topk=10, train_past_clicks=None, test_last_click=None):
 
     test_list = []
     for user_id in tqdm(range(200000, 250000)):
-        user = all_click_df.loc[all_click_df['user_id'] == user_id]
-        click_time = test_last_click.loc[test_last_click['user_id'] == user_id, 'click_timestamp'].values[0]
-        all_click_user = all_click_df[(click_time - 24 * 60 * 60 * 1000 <= all_click_df['created_at_ts']) & (all_click_df['created_at_ts'] <= click_time + 24 * 60 * 60 * 1000)]
-        item_topk_click = get_item_topk_click(all_click_user, k=topk)
+        user = test_click_df.loc[test_click_df['user_id'] == user_id]
+        click_time = test_last_click_time[user_id]
+        past_click_articles = user['click_article_id'].values
+        item_topk_click = get_item_topk_click_(test_hot_articles, test_hot_articles_dict, click_time, past_click_articles, k=topk)
         for id in item_topk_click:
-            if id in user['click_article_id'].values:
-                continue
             rows = [user_id, id]
             test_list.append(rows)
 
     hot_test_recall = pd.DataFrame(test_list, columns=['user_id', 'article_id'])
     hot_test_recall.to_csv(save_path + 'hot_test_recall.csv', index=False)
 
-    print('Hot Recall Finished!')
+    print('Hot Recall Finished! Cost time: {}'.format(time.time() - ts))
     
 #测试集召回
 def get_test_recall(itemcf=False, hot=False):
@@ -351,7 +365,7 @@ def get_train_recall(itemcf=False, hot=False, train_last_click=None):
             
             return data_new
         train = neg_sample_recall_data(train)
-        print('Negative Data Sample Finished! Cost time {}'.format(time.time() - ts))
+        print('Negative Data Sample Finished! Cost time: {}'.format(time.time() - ts))
         return train
 
     train = neg_sample(train)
@@ -360,6 +374,8 @@ def get_train_recall(itemcf=False, hot=False, train_last_click=None):
 
 #训练和预测
 def train_and_predict(itemcf=False, itemcf_topk=10, hot=False, hot_topk=10, offline=True):
+    ts = time.time()
+    
     if itemcf:
         train_past_clicks, train_last_click, test_last_click = itemcf_recall(itemcf_topk)
     if hot:
@@ -438,7 +454,7 @@ def train_and_predict(itemcf=False, itemcf_topk=10, hot=False, hot_topk=10, offl
         result = test_recall.sort_values(by=['user_id', 'pred_score'], ascending=(True, False))
         
         result = result.drop(columns=['category_id', 'created_at_ts', 'words_count', 'click_environment', 'click_deviceGroup', 'click_os', 'click_country', 'click_region', 'click_referrer_type', 'click_timestamp', 'delta_time'])
-        result.to_csv(save_path + 'test.csv', index=False)
+#         result.to_csv(save_path + 'test.csv', index=False)
         # 生成提交文件
         def submit_f(recall_df, topk=10, model_name=None):
             recall_df = recall_df.sort_values(by=['user_id', 'pred_score'])
@@ -462,7 +478,7 @@ def train_and_predict(itemcf=False, itemcf_topk=10, hot=False, hot_topk=10, offl
 
         submit_f(result, topk=5, model_name='lgb_ranker')
 
-        print('Submit Finished!')
+        print('Submit Finished! Cost time: {}'.format(time.time() - ts))
         
 offline = True
 
