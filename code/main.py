@@ -24,26 +24,24 @@ save_path = '../output/'  # 天池平台路径
 
 # # 全量训练集
 train_click = pd.read_csv(data_path + 'train_click_log.csv')
+testA_click = pd.read_csv(data_path + 'testA_click_log.csv')
+train_click = train_click.append(testA_click)
+
 test_click = pd.read_csv(data_path + 'testA_click_log.csv')
 articles = pd.read_csv(data_path + 'articles.csv')
 
 def get_all_click_df(data_path='./data_raw/', train=True, test=True):
     if train:
-        all_click = pd.read_csv(data_path + 'train_click_log.csv')
+        all_click = train_click.copy()
     if test:
-        all_click = pd.read_csv(data_path + 'testA_click_log.csv')
+        all_click = test_click.copy()
     if train and test:
-        trn_click = pd.read_csv(data_path + 'train_click_log.csv')
-        tst_click = pd.read_csv(data_path + 'testA_click_log.csv')
+        trn_click = train_click.copy()
+        tst_click = test_click.copy()
         all_click = trn_click.append(tst_click)
     
     all_click = all_click.drop_duplicates((['user_id', 'click_article_id', 'click_timestamp']))
     return all_click
-
-# 获取近期点击最多的文章
-def get_item_topk_click(click_df, k):
-    topk_click = click_df['click_article_id'].value_counts().index[:k]
-    return topk_click
 
 #物品相似度召回
 def itemcf_recall(topk=10):
@@ -52,11 +50,13 @@ def itemcf_recall(topk=10):
         train = train_click.sort_values(['user_id', 'click_timestamp']).reset_index().copy()
         list1 = []
         train_indexs = []
-        for user_id in tqdm(range(0, 200000)):
+        for user_id in tqdm(train['user_id'].unique()):
             user = train[train['user_id'] == user_id]
             row = user.tail(1)
             train_indexs.append(row.index.values[0])
-            list1.append(row.values.tolist()[0])
+            #testA中有一些只点了一次的用户要去掉
+            if len(user) >= 2:
+                list1.append(row.values.tolist()[0])
         train_last_click = pd.DataFrame(list1, columns=['index', 'user_id', 'article_id', 'click_timestamp', 'click_environment',\
                                         'click_deviceGroup', 'click_os', 'click_country', 'click_region',
                                         'click_referrer_type'])
@@ -66,7 +66,7 @@ def itemcf_recall(topk=10):
         
         test = test_click.sort_values(['user_id', 'click_timestamp']).reset_index().copy()
         list2 = []
-        for user_id in tqdm(range(200000, 250000)):
+        for user_id in tqdm(test['user_id'].unique()):
             user = test[test['user_id'] == user_id]
             row = user.tail(1)
             list2.append(row.values.tolist()[0])
@@ -74,8 +74,9 @@ def itemcf_recall(topk=10):
                                         'click_deviceGroup', 'click_os', 'click_country', 'click_region',
                                         'click_referrer_type'])
         test_last_click = test_last_click.drop(columns=['index'])
-
-        all_click_df = train_past_clicks.append(test_click)
+        
+        ###                    注释要去掉↓
+        all_click_df = train_past_clicks#.append(test_click)
         all_click_df = all_click_df.reset_index().drop(columns=['index'])
 
         all_click_df = all_click_df.drop_duplicates((['user_id', 'click_article_id', 'click_timestamp']))
@@ -96,14 +97,6 @@ def itemcf_recall(topk=10):
         return user_item_time_dict
 
     def itemcf_sim(df):
-        """
-            文章与文章之间的相似性矩阵计算
-            :param df: 数据表
-            :item_created_time_dict:  文章创建时间的字典
-            return : 文章与文章的相似性矩阵
-            思路: 基于物品的协同过滤(详细请参考上一期推荐系统基础的组队学习)， 在多路召回部分会加上关联规则的召回策略
-        """
-        
         user_item_time_dict = get_user_item_time(df)
         
         # 计算物品相似度
@@ -134,19 +127,7 @@ def itemcf_recall(topk=10):
     i2i_sim = itemcf_sim(all_click_df)
 
     # 基于商品的召回i2i
-    def item_based_recommend(user_id, user_item_time_dict, i2i_sim, sim_item_topk, recall_item_num, item_topk_click):
-        """
-            基于文章协同过滤的召回
-            :param user_id: 用户id
-            :param user_item_time_dict: 字典, 根据点击时间获取用户的点击文章序列   {user1: [(item1, time1), (item2, time2)..]...}
-            :param i2i_sim: 字典，文章相似性矩阵
-            :param sim_item_topk: 整数， 选择与当前文章最相似的前k篇文章
-            :param recall_item_num: 整数， 最后的召回文章数量
-            :param item_topk_click: 列表，点击次数最多的文章列表，用户召回补全        
-            return: 召回的文章列表 {item1:score1, item2: score2...}
-            注意: 基于物品的协同过滤(详细请参考上一期推荐系统基础的组队学习)， 在多路召回部分会加上关联规则的召回策略
-        """
-        
+    def item_based_recommend(user_id, user_item_time_dict, i2i_sim, sim_item_topk, recall_item_num):
         # 获取用户历史交互的文章
         user_hist_items = user_item_time_dict[user_id]
         user_hist_items_ = {user_id for user_id, _ in user_hist_items}
@@ -181,12 +162,9 @@ def itemcf_recall(topk=10):
     # 召回文章数量
     recall_item_num = topk
 
-    # 用户热度补全
-    item_topk_click = get_item_topk_click(all_click_df, k=50)
-
-    for user in tqdm(range(0, 250000)):
+    for user in tqdm(all_click_df['user_id'].unique()):
         user_recall_items_dict[user] = item_based_recommend(user, user_item_time_dict, i2i_sim, 
-                                                            sim_item_topk, recall_item_num, item_topk_click)
+                                                            sim_item_topk, recall_item_num)
     # 将字典的形式转换成df
     user_item_score_list = []
 
@@ -197,13 +175,9 @@ def itemcf_recall(topk=10):
     recall_df = pd.DataFrame(user_item_score_list, columns=['user_id', 'click_article_id', 'pred_score'])
     recall_df.to_csv(save_path + 'recall_df.csv', index=False)
 
-    # 获取测试集
-    tst_click = pd.read_csv(data_path + 'testA_click_log.csv')
-    tst_users = tst_click['user_id'].unique()
-
     # 从所有的召回数据中将测试集中的用户选出来
-    tst_recall = recall_df[recall_df['user_id'].isin(tst_users)]
-    train_recall = recall_df[recall_df['user_id'].isin(range(0, 200000))]
+    tst_recall = recall_df[recall_df['user_id'].isin(test_last_click['user_id'].unique())]
+    train_recall = recall_df[recall_df['user_id'].isin(train_last_click['user_id'].unique())]
 
     test_recall = tst_recall.copy()
     test_recall = test_recall.sort_values(by=['user_id', 'pred_score'])
@@ -222,7 +196,7 @@ def hot_recall(topk=10, train_past_clicks=None, test_last_click=None):
     
     train_click_df = get_all_click_df(data_path, test=False)
     test_click_df = get_all_click_df(data_path, train=False)
-
+    
     train_click_df = train_click_df.sort_values(['user_id', 'click_timestamp'])
     test_click_df = test_click_df.sort_values(['user_id', 'click_timestamp'])
     
@@ -259,7 +233,7 @@ def hot_recall(topk=10, train_past_clicks=None, test_last_click=None):
     test_hot_articles_dict = test_hot_articles.set_index('article_id')['created_at_ts'].to_dict()
     
     train_list = []
-    for user_id in tqdm(range(0, 200000)):
+    for user_id in tqdm(train_past_clicks['user_id'].unique()):
         user = train_past_clicks.loc[train_past_clicks['user_id'] == user_id]
 #         user = user[:(len(user) - 1)]
         click_time = train_last_click_time[user_id]
@@ -273,7 +247,7 @@ def hot_recall(topk=10, train_past_clicks=None, test_last_click=None):
     hot_train_recall.to_csv(save_path + 'hot_train_recall.csv', index=False)
 
     test_list = []
-    for user_id in tqdm(range(200000, 250000)):
+    for user_id in tqdm(test_click_df['user_id'].unique()):
         user = test_click_df.loc[test_click_df['user_id'] == user_id]
         click_time = test_last_click_time[user_id]
         past_click_articles = user['click_article_id'].values
@@ -313,12 +287,12 @@ def get_train_recall(itemcf=False, hot=False, train_last_click=None):
         itemcf_train_recall = itemcf_train_recall.rename(columns={'click_article_id': 'article_id'})
         itemcf_train_recall = itemcf_train_recall.merge(train_last_click, on=['user_id', 'article_id'], how='left')
         itemcf_train_recall['label'] = itemcf_train_recall['click_timestamp'].apply(lambda x: 0.0 if np.isnan(x) else 1.0)
-        print('Train ItemCF RECALL:{}%'.format((itemcf_train_recall['label'].value_counts()[1]) / 200000 * 100))
+        print('Train ItemCF RECALL:{}%'.format((itemcf_train_recall['label'].value_counts()[1]) / len(train_last_click['user_id'].unique()) * 100))
 
     if hot:
         hot_train_recall = pd.read_csv(save_path + 'hot_train_recall.csv')
         hot_train_recall['label'] = hot_train_recall.merge(train_last_click, on=['user_id', 'article_id'], how='left')['click_timestamp'].apply(lambda x: 0.0 if np.isnan(x) else 1.0)
-        print('Train Hot RECALL:{}%'.format((hot_train_recall['label'].value_counts()[1]) / 200000 * 100))
+        print('Train Hot RECALL:{}%'.format((hot_train_recall['label'].value_counts()[1]) / len(train_last_click['user_id'].unique()) * 100))
 
     if itemcf:
         train = itemcf_train_recall.copy()
@@ -328,7 +302,7 @@ def get_train_recall(itemcf=False, hot=False, train_last_click=None):
     train = train.drop_duplicates(['user_id', 'article_id'])
 
     train['pred_score'] = train['pred_score'].fillna(-100)
-    print('Train Total RECALL:{}%'.format((train['label'].value_counts()[1]) / 200000 * 100))
+    print('Train Total RECALL:{}%'.format((train['label'].value_counts()[1]) / len(train_last_click['user_id'].unique()) * 100))
     print('Train Total Recall Finished!')
     train.to_csv(save_path + 'train_recall.csv', index=False)
     
