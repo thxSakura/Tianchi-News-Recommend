@@ -27,7 +27,7 @@ train_click = pd.read_csv(data_path + 'train_click_log.csv')
 testA_click = pd.read_csv(data_path + 'testA_click_log.csv')
 train_click = train_click.append(testA_click)
 
-test_click = pd.read_csv(data_path + 'testA_click_log.csv')
+test_click = pd.read_csv(data_path + 'testB_click_log.csv')
 articles = pd.read_csv(data_path + 'articles.csv')
 
 def get_all_click_df(data_path='./data_raw/', train=True, test=True):
@@ -76,7 +76,7 @@ def itemcf_recall(topk=10):
         test_last_click = test_last_click.drop(columns=['index'])
         
         ###                    注释要去掉↓
-        all_click_df = train_past_clicks#.append(test_click)
+        all_click_df = train_past_clicks.append(test_click)
         all_click_df = all_click_df.reset_index().drop(columns=['index'])
 
         all_click_df = all_click_df.drop_duplicates((['user_id', 'click_article_id', 'click_timestamp']))
